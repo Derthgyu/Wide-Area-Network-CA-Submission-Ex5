@@ -1,0 +1,228 @@
+#include "ns3/applications-module.h"
+#include "ns3/core-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/netanim-module.h"
+#include "ns3/network-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/traffic-control-module.h"
+#include "ns3/flow-monitor-module.h"
+
+using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE("MulticastPimSmWAN");
+
+// Adresse du groupe Multicast
+const char* MULTICAST_GROUP = "225.1.1.1";
+// Adresse du Rendezvous Point (RP) - Nous utiliserons l'interface de R1 sur le Net 1
+const char* RP_ADDRESS = "10.1.1.2";
+
+int
+main(int argc, char* argv[])
+{
+    // 0. Configuration de base
+    LogComponentEnable("MulticastPimSmWAN", LOG_LEVEL_INFO);
+    LogComponentEnable("V4MulticastRoutingProtocol", LOG_LEVEL_ALL); // Pour vérifier les JOINS/PRUNES
+    LogComponentEnable("OnOffApplication", LOG_LEVEL_INFO);
+
+    // 1. Création des nœuds (2 sources/receivers + 3 routeurs)
+    NodeContainer nodes;
+    nodes.Create(5);
+    Ptr<Node> n0 = nodes.Get(0); // Source (S)
+    Ptr<Node> R1 = nodes.Get(1); // Router / Rendezvous Point (RP)
+    Ptr<Node> R2 = nodes.Get(2); // Router
+    Ptr<Node> R3 = nodes.Get(3); // Router
+    Ptr<Node> n2 = nodes.Get(4); // Receiver 1 (R1)
+    
+    // Ajout d'un 6ème nœud pour R2
+    NodeContainer node_n3;
+    node_n3.Create(1);
+    Ptr<Node> n3 = node_n3.Get(0); // Receiver 2 (R2)
+    nodes.Add(n3);
+
+
+    // 2. Configuration des liens Point-to-Point (WAN, 10Mbps, 5ms)
+    PointToPointHelper p2p;
+    p2p.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
+    p2p.SetChannelAttribute("Delay", StringValue("5ms"));
+
+    // Lien 1: n0 <-> R1 (Net 1: 10.1.1.0/24)
+    NodeContainer link1Nodes(n0, R1);
+    NetDeviceContainer link1Devices = p2p.Install(link1Nodes);
+
+    // Lien 2: R1 <-> R2 (Net 2: 10.1.2.0/24)
+    NodeContainer link2Nodes(R1, R2);
+    NetDeviceContainer link2Devices = p2p.Install(link2Nodes);
+
+    // Lien 3: R1 <-> R3 (Net 3: 10.1.3.0/24)
+    NodeContainer link3Nodes(R1, R3);
+    NetDeviceContainer link3Devices = p2p.Install(link3Nodes);
+    
+    // Lien 4: R2 <-> n2 (Net 4: 10.1.4.0/24)
+    NodeContainer link4Nodes(R2, n2);
+    NetDeviceContainer link4Devices = p2p.Install(link4Nodes);
+    
+    // Lien 5: R3 <-> n3 (Net 5: 10.1.5.0/24)
+    NodeContainer link5Nodes(R3, n3);
+    NetDeviceContainer link5Devices = p2p.Install(link5Nodes);
+
+
+    // 3. Installation de la pile Internet et Routage Multicast (Question 1)
+    InternetStackHelper stack;
+    
+    // Configuration Multicast pour les routeurs R1, R2, R3
+    Ipv4ListRoutingHelper listRH;
+    listRH.Add(CreateObject<Ipv4StaticRoutingHelper>(), 0);
+    listRH.Add(CreateObject<Ipv4GlobalRoutingHelper>(), 5);
+    // Ajoutez le routage Multicast (PIM-SM) avec la priorité la plus basse
+    V4MulticastRoutingHelper v4mr;
+    listRH.Add(v4mr, 10);
+    
+    // Installer la pile avec le routage Multicast sur les routeurs
+    stack.SetRoutingHelper(listRH);
+    stack.Install(R1);
+    stack.Install(R2);
+    stack.Install(R3);
+
+    // Installer la pile standard sur les hôtes (Source et Receveurs)
+    stack.SetRoutingHelper(Ipv4ListRoutingHelper());
+    stack.Install(n0);
+    stack.Install(n2);
+    stack.Install(n3);
+
+
+    // 4. Attribution des adresses IP
+    Ipv4AddressHelper address;
+
+    address.SetBase("10.1.1.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces1 = address.Assign(link1Devices); // n0: 10.1.1.1, R1: 10.1.1.2
+
+    address.SetBase("10.1.2.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces2 = address.Assign(link2Devices); // R1: 10.1.2.1, R2: 10.1.2.2
+
+    address.SetBase("10.1.3.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces3 = address.Assign(link3Devices); // R1: 10.1.3.1, R3: 10.1.3.2
+
+    address.SetBase("10.1.4.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces4 = address.Assign(link4Devices); // R2: 10.1.4.1, n2: 10.1.4.2
+
+    address.SetBase("10.1.5.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces5 = address.Assign(link5Devices); // R3: 10.1.5.1, n3: 10.1.5.2
+    
+    // Activer le forwarding sur les routeurs
+    R1->GetObject<Ipv4>()->SetAttribute("IpForward", BooleanValue(true));
+    R2->GetObject<Ipv4>()->SetAttribute("IpForward", BooleanValue(true));
+    R3->GetObject<Ipv4>()->SetAttribute("IpForward", BooleanValue(true));
+
+
+    // 5. Configuration du Rendezvous Point (RP) (Question 2)
+    Ptr<V4MulticastRouting> v4mrR1 = DynamicCast<V4MulticastRouting>(R1->GetObject<Ipv4>()->GetRoutingProtocol());
+    v4mrR1->Add
+    MulticastRouter
+    (Ipv4Address(RP_ADDRESS));
+
+
+    // 6. Application de trafic (Question 3)
+    
+    // A. Récepteurs Multicast (n2, n3)
+    
+    // Le récepteur n2 (10.1.4.2) rejoint le groupe via son interface sur Net 4
+    Ptr<NetDevice> receiver1Dev = link4Devices.Get(1); // n2's interface
+    Ptr<Ipv4> ipv4N2 = n2->GetObject<Ipv4>();
+    ipv4N2->Add
+    MulticastMembership
+    (1, Ipv4Address(MULTICAST_GROUP)); // Adhérer au groupe
+    
+    // Le récepteur n3 (10.1.5.2) rejoint le groupe via son interface sur Net 5
+    Ptr<NetDevice> receiver2Dev = link5Devices.Get(1); // n3's interface
+    Ptr<Ipv4> ipv4N3 = n3->GetObject<Ipv4>();
+    ipv4N3->Add
+    MulticastMembership
+    (1, Ipv4Address(MULTICAST_GROUP));
+    
+    // Recevoir le trafic Multicast sur n2 et n3
+    UdpClientHelper multicastSink1(Ipv4Address(MULTICAST_GROUP), port);
+    ApplicationContainer sinkApps1 = multicastSink1.Install(n2);
+    sinkApps1.Start(Seconds(1.0));
+    sinkApps1.Stop(Seconds(11.0));
+    
+    UdpClientHelper multicastSink2(Ipv4Address(MULTICAST_GROUP), port);
+    ApplicationContainer sinkApps2 = multicastSink2.Install(n3);
+    sinkApps2.Start(Seconds(1.0));
+    sinkApps2.Stop(Seconds(11.0));
+    
+
+    // B. Source Multicast (n0) - Trafic IPTV-like (Débit élevé)
+    // 5 Mbps de trafic vidéo vers le groupe 225.1.1.1
+    Ptr<OnOffHelper> onOffMulticast = CreateObject<OnOffHelper>(
+        "ns3::UdpClient", 
+        AddressValue(InetSocketAddress(Ipv4Address(MULTICAST_GROUP), port)) // Destination: Groupe Multicast
+    );
+    onOffMulticast->SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+    onOffMulticast->SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+    onOffMulticast->SetAttribute("PacketSize", UintegerValue(1400));
+    onOffMulticast->SetAttribute("DataRate", DataRateValue(DataRate("5Mbps")));
+    
+    // S'assurer que la source utilise la bonne interface pour l'émission Multicast
+    onOffMulticast->SetAttribute("Remote", AddressValue(InetSocketAddress(Ipv4Address(MULTICAST_GROUP), port)));
+    
+    ApplicationContainer clientMulticast = onOffMulticast->Install(n0);
+    clientMulticast.Start(Seconds(2.0));
+    clientMulticast.Stop(Seconds(11.0));
+
+
+    // 7. FlowMonitor pour la mesure de performance (Question 4)
+    FlowMonitorHelper flowMonitorHelper;
+    Ptr<FlowMonitor> flowMonitor = flowMonitorHelper.InstallAll();
+
+    // Lancer la découverte des routes (nécessaire pour Global/Multicast Routing)
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+    // Configuration NetAnim (optionnel)
+    // AnimationInterface anim("scratch/multicast-pim-sm-wan.xml");
+    // anim.UpdateNodeDescription(n0, "Source");
+    // anim.UpdateNodeDescription(R1, "RP/Router");
+    // ...
+
+    // Exécuter la simulation
+    Simulator::Stop(Seconds(12.0));
+    Simulator::Run();
+
+    // Analyse des résultats (FlowMonitor)
+    flowMonitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowMonitorHelper.GetClassifier());
+    std::map<FlowId, FlowMonitor::FlowStats> stats = flowMonitor->Get
+    stats();
+
+    std::cout << "\n\n=== RÉSULTATS DE L'ANALYSE MULTICAST ===\n";
+    for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
+    {
+        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
+
+        // Se concentrer sur les flux reçus par les récepteurs (n2 et n3)
+        if (t.destinationPort == port && t.destinationAddress == Ipv4Address(MULTICAST_GROUP))
+        {
+            double delay = i->second.delaySum.GetSeconds() / i->second.rxPackets;
+            double jitter = i->second.jitterSum.GetSeconds() / i->second.rxPackets;
+            double loss = (double)i->second.lostPackets / i->second.txPackets * 100.0;
+            double throughput = i->second.rxBytes * 8.0 / (i->second.timeLastRxPacket.GetSeconds() - i->second.timeFirstTxPacket.GetSeconds()) / 1000000.0;
+
+            std::cout << "\n--- Flux vers " << t.destinationAddress << " (Recepteur) ---\n";
+            std::cout << "  Récepteur: " << t.destinationAddress << " Port: " << t.destinationPort << "\n";
+            std::cout << "  Latence Moyenne (s): " << std::fixed << std::setprecision(6) << delay << "\n";
+            std::cout << "  Gigue Moyenne (s): " << std::fixed << std::setprecision(6) << jitter << "\n";
+            std::cout << "  Débit Reçu (Mbps): " << std::fixed << std::setprecision(3) << throughput << "\n";
+            std::cout << "  Perte de Paquets: " << std::fixed << std::setprecision(2) << loss << " %\n";
+        }
+    }
+    std::cout << "======================================================\n";
+    
+    Simulator::Destroy();
+    
+    std::cout << "\n=== Simulation Multicast PIM-SM Complète ===\n";
+    std::cout << "Vérifiez les logs pour les messages PIM-SM (JOINS/PRUNES).\n";
+    std::cout << "Le trafic vidéo (5 Mbps) doit être reçu par les deux hôtes sans perte (si pas de congestion).\n";
+
+    return 0;
+}
+
