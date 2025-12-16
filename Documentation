@@ -1,0 +1,29 @@
+name: Nzeugang Ngoptat Joël Daniel 
+matricule : ICTU20241389
+EXERCISE 5: Policy-Based Routing (PBR)
+Interpretation:
+
+Routing decisions depend on traffic type, not destination.
+
+Logic:
+	• Video → low-latency path
+	• Data → high-bandwidth path
+
+Pseudocode:
+if (packet.port == VIDEO_PORT)
+  usePathA();
+else
+  usePathB();
+
+Metrics Source:
+	• FlowMonitor
+	• Ipv4L3Protocol trace hooks
+
+
+ Explanation 
+
+This exercise focuses on Policy-Based Routing (PBR) in a WAN environment. The goal is to route traffic based on defined policies rather than only on destination IP addresses.
+
+In this exercise, different types of traffic are identified, such as video traffic and data traffic. Routing decisions are then made according to specific rules, for example sending video traffic through a low-latency path and data traffic through a high-bandwidth path. This allows the network to use its resources more efficiently.
+
+The exercise highlights how modern networks can make intelligent routing decisions based on application requirements, improving performance, reliability, and user experience.
